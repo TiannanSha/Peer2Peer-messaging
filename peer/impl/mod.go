@@ -7,7 +7,6 @@ import (
 	"go.dedis.ch/cs438/peer"
 	"go.dedis.ch/cs438/transport"
 	"go.dedis.ch/cs438/types"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -24,7 +23,10 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	routingTable[conf.Socket.GetAddress()]= conf.Socket.GetAddress()
 	stopSig := make(chan bool)
 	status := make(map[string]uint)
-	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status}
+	nbrs := make(map[string]bool)
+	rumorsReceived := make(map[string][]types.Rumor)
+
+	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrs: nbrs, rumorsReceived: rumorsReceived}
 }
 
 // node implements a peer to build a Peerster system
@@ -39,7 +41,10 @@ type node struct {
 	sync.RWMutex
 	sequenceNumber uint // sequence number of last created
 	Status types.StatusMessage
-	peers []string
+	nbrs   map[string]bool
+	addr   string
+	antiEntropyQuitCh chan struct{} // initialized when starting antiEntropy mechanism
+	rumorsReceived map[string][]types.Rumor
 }
 
 // Start implements peer.Service
@@ -49,11 +54,17 @@ func (n *node) Start() error {
 	//panic("to be implemented in HW0")
 	// add my addr to the routing table
 	// n.AddPeer(n.conf.Socket.GetAddress())
-	log.Info().Msg("in node Start()***************")
+	log.Info().Msgf("in node Start()***************, node: %s", n.addr)
 	//  register handlers for different types of messages
 	n.conf.MessageRegistry.RegisterMessageCallback(types.ChatMessage{}, n.ExecChatMessage)
 	n.conf.MessageRegistry.RegisterMessageCallback(types.RumorsMessage{}, n.ExecRumorsMessage)
 	n.conf.MessageRegistry.RegisterMessageCallback(types.AckMessage{}, n.ExecAckMessage)
+	n.conf.MessageRegistry.RegisterMessageCallback(types.StatusMessage{}, n.ExecStatusMessage)
+
+	// optionally start anti-entropy mechanism
+	if (n.conf.AntiEntropyInterval>0) {
+		n.startAntiEntropy()
+	}
 
 	go func() {
 		for {
@@ -80,6 +91,7 @@ func (n* node) handlePacket(pkt transport.Packet) {
 	log.Info().Msg("handlePacket()")
 	mySocketAddr := n.conf.Socket.GetAddress()
 	if (pkt.Header.Destination == n.conf.Socket.GetAddress() ) {
+		log.Debug().Msgf("pkt: %s", pkt)
 		err := n.conf.MessageRegistry.ProcessPacket(pkt)
 		if (err!=nil) {
 			log.Warn().Msgf("in handlePacket(),err:%v",err)
@@ -94,10 +106,12 @@ func (n* node) handlePacket(pkt transport.Packet) {
 }
 
 // Stop implements peer.Service
+// todo maybe add a status variable in node to avoid calling stop more than once
 func (n *node) Stop() error {
 	//panic("to be implemented in HW0")
 	log.Print("trying to stop() the peer\n")
 	n.stopSigCh<-true
+	n.stopAntiEntropy()
 	return nil
 }
 
@@ -113,6 +127,24 @@ func (n *node) Unicast(dest string, msg transport.Message) error {
 		err := n.conf.Socket.Send(nextHop, pkt, 0)
 		if (err!=nil) {
 			log.Info().Msgf("error in unicast %v \n", err)
+		}
+		return nil
+	}
+	return errors.New("unicast dest is not neighbour and not in routing table")
+}
+
+// relay preserves the original src
+func (n *node) Relay(src string, dest string, msg transport.Message) error {
+	//panic("to be implemented in HW0")
+	// check if destination is my neighbour, i.e. in my routing table
+	nextHop,ok := n.routingTable[dest]
+	if (ok) {
+		// relay should be the address of node who sends the package
+		header := transport.NewHeader(src, n.conf.Socket.GetAddress(), dest, 0)
+		pkt := transport.Packet{Header:&header,Msg: &msg}
+		err := n.conf.Socket.Send(nextHop, pkt, 0)
+		if (err!=nil) {
+			log.Info().Msgf("error in Relay() %v \n", err)
 		}
 		return nil
 	}
@@ -141,11 +173,15 @@ func (n *node) Broadcast(msg transport.Message) error {
 		Payload: data,
 	}
 
-	dest := n.peers[rand.Intn(len(n.peers))]
+	var dest string
+	for dest = range(n.nbrs) {
+		break;
+	}
 	err = n.Unicast(dest, transportMsg)
 	if (err!=nil) {
 		log.Warn().Msgf("error in broadcast() after unicast:%s", err)
 	}
+
 	//
 	//for n1,n2 := range n.routingTable {
 	//	// todo check whether this is necessary
@@ -162,13 +198,16 @@ func (n *node) Broadcast(msg transport.Message) error {
 	//	}
 	//}
 
-	// process messege locally todo what should we do here???
-	//header := transport.NewHeader(n.conf.Socket.GetAddress(), relay, dest, 0)
-	//pkt := transport.Packet{
-	//	Header: &header,
-	//	Msg: &transportMsg,
-	//}
-	//err = n.conf.MessageRegistry.ProcessPacket(pkt)
+	// process the message locally
+	header := transport.NewHeader(n.addr, n.addr, n.addr, 0)
+	// let's execute the message (the one embedded in a rumor) "locally"
+	pkt := transport.Packet{
+		Header: &header,
+		Msg: &msg }
+	err = n.conf.MessageRegistry.ProcessPacket(pkt)
+	if err != nil {
+		log.Warn().Msgf("error in Broadcast() when processing msg locally")
+	}
 
 	return nil
 }
@@ -193,7 +232,7 @@ func (n *node) AddPeer(addr ...string) {
 
 	for _,oneAddr := range addr {
 		n.SetRoutingEntry(oneAddr, oneAddr)
-		n.peers = append(n.peers, oneAddr)
+		n.nbrs[oneAddr] = true
 	}
 
 }
@@ -218,6 +257,10 @@ func (n *node) SetRoutingEntry(origin, relayAddr string) {
 		delete(n.routingTable, origin)
 	} else {
 		n.routingTable[origin] = relayAddr
+		if (origin==relayAddr && origin!=n.addr) {
+			// this is a peer, add it to nbrs
+			n.nbrs[origin] = true
+		}
 	}
 	n.Unlock()
 }
@@ -255,14 +298,14 @@ func (n *node) SetRoutingEntry(origin, relayAddr string) {
 //	// Process each Rumor Ʀ by checking if Ʀ is expected or not
 //	atLeastOneRumorExpected := false
 //	for _,r:=range rumorsMsg.Rumors {
-//		if n.execRumor(r, pkt) {
+//		if n.ExecRumor(r, pkt) {
 //			atLeastOneRumorExpected = true
 //		}
 //	}
 //
 //	// if one rumor is expected need to send rumorsMsg to another random neighbor
 //	if atLeastOneRumorExpected {
-//		msg:= n.wrapInTransMsgBeforeUnicast(rumorsMsg, rumorsMsg.Name())
+//		msg:= n.wrapInTransMsgBeforeUnicastOrSend(rumorsMsg, rumorsMsg.Name())
 //		nbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
 //		if (err!=nil) {
 //			// no suitable neighbour, don't send
@@ -276,7 +319,7 @@ func (n *node) SetRoutingEntry(origin, relayAddr string) {
 //	src := pkt.Header.Source
 //	statusMsg := n.Status
 //	ackMsg := types.AckMessage{Status: statusMsg, AckedPacketID: pkt.Header.PacketID}
-//	transportMsg := n.wrapInTransMsgBeforeUnicast(ackMsg, ackMsg.Name())
+//	transportMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg, ackMsg.Name())
 //	err := n.Unicast(src, transportMsg)
 //	if err != nil {
 //		log.Warn().Msgf("err in ExecRumorsMessage() when calling unicast: %s", err)
@@ -295,7 +338,7 @@ func (n *node) selectARandomNbrExcept(except string) (string, error) {
 }
 
 //// return whether this rumor message was expected
-//func (n *node)execRumor(rumor types.Rumor, pkt transport.Packet) bool {
+//func (n *node)ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
 //	 currSeqNum, _ := n.Status[rumor.Origin]
 //	 if (currSeqNum+1) == rumor.Sequence {
 //		 pktInRumor := n.wrapMsgIntoPacket(*rumor.Msg, pkt)
@@ -307,7 +350,7 @@ func (n *node) selectARandomNbrExcept(except string) (string, error) {
 //}
 
 // TODO how to write a generic function to wrap diff kinds of msgs to transport msg before unicast
-func (n* node) wrapInTransMsgBeforeUnicast(msg types.Message, msgName string) transport.Message{
+func (n* node) wrapInTransMsgBeforeUnicastOrSend(msg types.Message, msgName string) transport.Message{
 	data, err := json.Marshal(&msg)
 	if (err!=nil) {
 		log.Error().Msgf("err in broadcast():%s", err)
