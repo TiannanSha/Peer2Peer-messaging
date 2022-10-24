@@ -10,13 +10,13 @@ import (
 )
 
 func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error {
-	log.Info().Msgf("for node %v,  Enter ExecRumorsMessage()", n)
+	log.Info().Msgf("for node %s,  Enter ExecRumorsMessage()", n.addr)
 	// cast the message to its actual type. You assume it is the right type.
 	rumorsMsg, ok := msg.(*types.RumorsMessage)
 	if !ok {
 		return xerrors.Errorf("wrong type: %T", msg)
 	}
-	log.Info().Msgf("in ExecRumorsMessage, parse out rumorsMsg:%s",rumorsMsg)
+	log.Info().Msgf("node %s, in ExecRumorsMessage, parse out rumorsMsg:%s",n.addr , rumorsMsg)
 
 	/* do your stuff here with rumorsMsg... */
 	// Process each Rumor Ʀ by checking if Ʀ is expected or not
@@ -34,28 +34,32 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 		nbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
 		if (err!=nil) {
 			// no suitable neighbour, don't send
-			log.Warn().Msgf("error in ExecRumorsMessage():%s", err)
+			log.Warn().Msgf("node %s error in ExecRumorsMessage():%s", n.addr, err)
 		} else {
 			err := n.Relay(pkt.Header.Source, nbr, msg)
 			if err != nil {
-				log.Warn().Msgf("error in ExecRumorsMessage() after Relay() :%s", err)
+				log.Warn().Msgf("node %s , error in ExecRumorsMessage() after Relay() :%s", n.addr, err)
 			}
 		}
 	}
 
 	// Send back an AckMessage to the source. need to add src to my routing table
+	// if this is my own message, no need to reply ack
 	src := pkt.Header.Source
+	if (src==n.addr) {
+		return nil
+	}
 	n.SetRoutingEntry(src, pkt.Header.RelayedBy)
 	ackMsg := types.AckMessage{Status: n.Status, AckedPacketID: pkt.Header.PacketID} //todo refactor wrapping into overloading funcs
 	data,err := json.Marshal(ackMsg)
 	if (err!=nil) {
-		log.Warn().Msgf("err in ExecRumorsMessage: %s", err)
+		log.Warn().Msgf("node %s, err in ExecRumorsMessage: %s", n.addr, err)
 	}
 	transportMsg := transport.Message{Type: ackMsg.Name(), Payload: data}
 	//transportMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg, ackMsg.Name())
 	err = n.Unicast(src, transportMsg)
 	if err != nil {
-		log.Warn().Msgf("err in ExecRumorsMessage() when calling unicast: %s", err)
+		log.Warn().Msgf("node %s , err in ExecRumorsMessage() when calling unicast: %s", n.addr, err)
 	}
 
 	return nil
@@ -68,7 +72,7 @@ func (n *node) ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
 		pktInRumor := n.wrapMsgIntoPacket(*rumor.Msg, pkt)
 		err := n.conf.MessageRegistry.ProcessPacket(pktInRumor)
 		if err != nil {
-			log.Warn().Msgf("in ExecRumor(), ProcessPacket returns error: %s", err)
+			log.Warn().Msgf("node %s in ExecRumor(), ProcessPacket returns error: %s", n.addr, err)
 		}
 		n.Status[rumor.Origin] = currSeqNum+1
 		n.rumorsReceived[rumor.Origin] = append(n.rumorsReceived[rumor.Origin], rumor)
@@ -99,16 +103,40 @@ func (n* node) ExecAckMessage(msg types.Message, pkt transport.Packet) error {
 	if !ok {
 		return xerrors.Errorf("wrong type: %T", msg)
 	}
+	// todo maybe should use a diff lock for each data structure
+	// notify the go routine waiting for pktId that we received ack for it
+	//n.rwmutexPktAckChannels.Lock()
+	//ch := n.pktAckChannels[pkt.Header.PacketID]
+	//ch <- true
+	//n.rwmutexPktAckChannels.Unlock()
 
-	// do your stuff here with chatMsg...
-	// log that message. Nothing else needs to be done. The ChatMessage is parsed
-	// by the web-frontend using the message registry.
-	log.Info().Msgf("ackMsg:%s",ackMsg)
+	// process the status message inside the ack message
+	statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg.Status, ackMsg.Status.Name())
+	newPkt := n.wrapMsgIntoPacket(statusMsg, pkt)
+	err := n.conf.MessageRegistry.ProcessPacket(newPkt)
+	if err != nil {
+		log.Info().Msgf("node %s err in ExecAckMessage():", n.addr, err)
+	}
+
+	return nil
+}
+
+func (n *node) ExecPrivateMessage(msg types.Message, pkt transport.Packet) error {
+	privateMsg, ok := msg.(*types.PrivateMessage)
+	if !ok {
+		return xerrors.Errorf("wrong type: %T", msg)
+	}
+	_,IamRecipient := privateMsg.Recipients[n.addr]
+	if IamRecipient {
+		newPkt :=n.wrapMsgIntoPacket(*privateMsg.Msg, pkt)
+		n.conf.MessageRegistry.ProcessPacket(newPkt)
+	}
 	return nil
 }
 
 // todo should this be locked?
 func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error {
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage()", n.addr)
 	statusMsg, ok := msg.(*types.StatusMessage)
 	if !ok {
 		return xerrors.Errorf("wrong type: %T", msg)
@@ -117,6 +145,12 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 	IHaveNew := false
 	otherHasNew := false
 	var rumorsNeedToSend []types.Rumor
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.rumosReceived=%s, ", n.addr, n.rumorsReceived)
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), received statusMsg=%s, ", n.addr, statusMsg)
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.Status=%s, ", n.addr, n.Status)
+
+	// should loop thru the union of statusMsg.key and n.Status.key.... yeah.. they might even have same size
+	// but different keys
 	for node,othersSeq := range *statusMsg {
 		mySeq := n.Status[node]
 		if (mySeq < othersSeq) {
@@ -130,7 +164,17 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 			rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][othersSeq:mySeq]...)
 		}
 	}
+	// check for node that exist in my status but not in other's status message
+	for node,mySeq := range n.Status {
+		_, inOthers := (*statusMsg)[node]
+		if (!inOthers) {
+			// for node, I have 1,...,mySeq the other has none, so send index [0, mySeq)
+			IHaveNew = true
+			rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][:mySeq]...)
+		}
+	}
 
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
 	if otherHasNew {
 		// I have less than this node, so I send my status to this node and it will send back more messages
 		msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
@@ -149,10 +193,13 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 		if rand.Float64() < n.conf.ContinueMongering {
 			newNbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
 			if (err!=nil) {
-				log.Warn().Msgf("In ExecStatusMessage, err: %s", err)
+				log.Warn().Msgf("Node %s,In ExecStatusMessage, err: %s", n.addr, err)
 			}
-			statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
-			n.directlySendToNbr(statusMsg, newNbr, 0)
+			if newNbr!="" {
+				// successfully get a random nbr
+				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
+				n.directlySendToNbr(statusMsg, newNbr, 0)
+			}
 		}
 
 	}
@@ -161,9 +208,10 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 
 /**
  * this function does not use routing table but directly use Send() to send back to nbr
+ * @return packet it sent
  */
-func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string, ttl uint) {
-	header := transport.NewHeader(n.addr, nbr, nbr, ttl)
+func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string, ttl uint) transport.Packet {
+	header := transport.NewHeader(n.addr, n.addr, nbr, ttl)
 	newPkt := transport.Packet{
 		Header: &header,
 		Msg:    &msgToReply,
@@ -172,4 +220,5 @@ func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string, ttl u
 	if err != nil {
 		log.Warn().Msgf("in directlySendToNbr() err: %s", err)
 	}
+	return newPkt
 }

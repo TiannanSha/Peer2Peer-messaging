@@ -25,8 +25,9 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	status := make(map[string]uint)
 	nbrs := make(map[string]bool)
 	rumorsReceived := make(map[string][]types.Rumor)
+	pktAckChannels := make(map[string]chan bool)
 
-	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrs: nbrs, rumorsReceived: rumorsReceived}
+	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrs: nbrs, rumorsReceived: rumorsReceived, pktAckChannels: pktAckChannels}
 }
 
 // node implements a peer to build a Peerster system
@@ -44,7 +45,10 @@ type node struct {
 	nbrs   map[string]bool
 	addr   string
 	antiEntropyQuitCh chan struct{} // initialized when starting antiEntropy mechanism
+	heartbeatQuitCh chan struct{} // initialized when starting heartbeat mechanism
 	rumorsReceived map[string][]types.Rumor
+	pktAckChannels map[string]chan bool
+	rwmutexPktAckChannels sync.RWMutex
 }
 
 // Start implements peer.Service
@@ -60,10 +64,16 @@ func (n *node) Start() error {
 	n.conf.MessageRegistry.RegisterMessageCallback(types.RumorsMessage{}, n.ExecRumorsMessage)
 	n.conf.MessageRegistry.RegisterMessageCallback(types.AckMessage{}, n.ExecAckMessage)
 	n.conf.MessageRegistry.RegisterMessageCallback(types.StatusMessage{}, n.ExecStatusMessage)
+	n.conf.MessageRegistry.RegisterMessageCallback(types.PrivateMessage{}, n.ExecPrivateMessage)
 
 	// optionally start anti-entropy mechanism
 	if (n.conf.AntiEntropyInterval>0) {
 		n.startAntiEntropy()
+	}
+
+	// optionally start heartbeat mechanism
+	if (n.conf.HeartbeatInterval>0) {
+		n.startHeartbeat()
 	}
 
 	go func() {
@@ -88,30 +98,37 @@ func (n *node) Start() error {
 
 // process packet if dest is my addr, otherwise forward the packet to the actual dest
 func (n* node) handlePacket(pkt transport.Packet) {
-	log.Info().Msg("handlePacket()")
+	log.Info().Msgf("node %s handlePacket()", n.addr)
+	log.Info().Msg("pkt:")
+	log.Info().Msgf("%s", pkt)
+	log.Info().Msg("----------------------------------")
 	mySocketAddr := n.conf.Socket.GetAddress()
 	if (pkt.Header.Destination == n.conf.Socket.GetAddress() ) {
-		log.Debug().Msgf("pkt: %s", pkt)
+		//log.Debug().Msgf("node %s, pkt: %s", pkt, n.addr)
 		err := n.conf.MessageRegistry.ProcessPacket(pkt)
 		if (err!=nil) {
-			log.Warn().Msgf("in handlePacket(),err:%v",err)
+			log.Warn().Msgf("node %s, in handlePacket(),err:%v",n.addr, err)
 		}
 	} else {
 		pkt.Header.RelayedBy = mySocketAddr
 		err := n.conf.Socket.Send(pkt.Header.Destination, pkt, 0)
 		if (err!=nil) {
-			log.Warn().Msgf("err:%v",err)
+			log.Warn().Msgf("node %s, err:%v",n.addr, err)
 		}
 	}
 }
 
 // Stop implements peer.Service
-// todo maybe add a status variable in node to avoid calling stop more than once
 func (n *node) Stop() error {
-	//panic("to be implemented in HW0")
-	log.Print("trying to stop() the peer\n")
+
+	log.Info().Msgf("trying to stop() node %s", n.addr)
 	n.stopSigCh<-true
 	n.stopAntiEntropy()
+	log.Info().Msgf("trying to stop() node %s, after stopAntiEntropy", n.addr)
+	n.stopHeartbeat()
+	log.Info().Msgf("trying to stop() node %s, after stopHeartBeat", n.addr)
+	//n.stopAllWaitingForACK()
+	log.Info().Msgf("trying to stop() node %s, after stopAllWaitingForACK", n.addr)
 	return nil
 }
 
@@ -151,15 +168,21 @@ func (n *node) Relay(src string, dest string, msg transport.Message) error {
 	return errors.New("unicast dest is not neighbour and not in routing table")
 }
 
+// create rumor and update my status and rumorsReceived accordingly
 func (n *node) createRumor(msg transport.Message) types.Rumor {
+	n.Lock()
+	defer n.Unlock()
 	n.sequenceNumber++;
 	rumor := types.Rumor{Origin: n.conf.Socket.GetAddress(), Sequence: n.sequenceNumber, Msg: &msg}
+	n.Status[n.addr] = n.Status[n.addr]+1
+	n.rumorsReceived[n.addr] = append(n.rumorsReceived[n.addr], rumor)
 	return rumor
 }
 
 // Broadcast implements peer.messaging
 //- Create a RumorsMessage containing one Rumor (this rumor embeds the message provided in argument), and send it to a random neighbour.
 //- Process the message locally
+// todo since send to immediate nbr, can use send instead of unicast
 func (n *node) Broadcast(msg transport.Message) error {
 	rumor := n.createRumor(msg)
 	rumors := []types.Rumor{rumor}
@@ -173,35 +196,22 @@ func (n *node) Broadcast(msg transport.Message) error {
 		Payload: data,
 	}
 
-	var dest string
-	for dest = range(n.nbrs) {
-		break;
+	var randNbr string
+	for randNbr = range(n.nbrs) {
+		log.Info().Msgf("**** !!@##@node %s in Broadcast, send to %s, ", n.addr, randNbr)
+		break
 	}
-	err = n.Unicast(dest, transportMsg)
-	if (err!=nil) {
-		log.Warn().Msgf("error in broadcast() after unicast:%s", err)
-	}
-
-	//
-	//for n1,n2 := range n.routingTable {
-	//	// todo check whether this is necessary
-	//	// may be should just pick any node and send, or neighbour means a direct neighbour?
-	//	if (n1 == n2 && n1!=n.conf.Socket.GetAddress()) {
-	//		// this is a direct neighbour
-	//		err = n.Unicast(n1, transportMsg)
-	//		dest = n1
-	//		relay = n2
-	//		if (err!=nil) {
-	//			log.Warn().Msgf("error in broadcast() after unicast:%s", err)
-	//		}
-	//		break
-	//	}
+	pkt := n.directlySendToNbr(transportMsg, randNbr, 0)
+	//err = n.Unicast(randNbr, transportMsg)
+	//if (err!=nil) {
+	//	log.Warn().Msgf("error in broadcast() after unicast:%s", err)
 	//}
+	//go n.waitForAck(transportMsg, randNbr, pkt.Header.PacketID)
 
 	// process the message locally
 	header := transport.NewHeader(n.addr, n.addr, n.addr, 0)
 	// let's execute the message (the one embedded in a rumor) "locally"
-	pkt := transport.Packet{
+	pkt = transport.Packet{
 		Header: &header,
 		Msg: &msg }
 	err = n.conf.MessageRegistry.ProcessPacket(pkt)
@@ -210,6 +220,55 @@ func (n *node) Broadcast(msg transport.Message) error {
 	}
 
 	return nil
+}
+
+// wait for an ACK from nbr for a broadcast transport message that was sent to nbr
+func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktIdWaiting string) {
+	if (n.conf.AckTimeout==0) { // todo change to ==0
+		return
+	}
+	ch := make(chan bool, 1)
+	n.rwmutexPktAckChannels.Lock()
+	n.pktAckChannels[pktIdWaiting] = ch
+	n.rwmutexPktAckChannels.Unlock()
+	select {
+		case <- ch:
+			log.Info().Msgf("node %s has recevied ack", n.addr)
+			// clean up the channel waiting for this packet
+			n.rwmutexPktAckChannels.Lock()
+			//todo remove pktId in the channels no need to wait for it
+			delete(n.pktAckChannels, pktIdWaiting)
+			n.rwmutexPktAckChannels.Unlock()
+			return
+		case <- time.After(n.conf.AckTimeout):
+			log.Info().Msgf("node %s has NOT recevied ack, timed out after %s", n.addr, n.conf.AckTimeout)
+			// no ack, need to rebroadcast the transport message by sending to a different nbr
+			newNbr,err := n.selectARandomNbrExcept(prevNbr)
+			if (err!=nil) {
+				// todo what to do if there is not another nbr? giveup?
+				log.Warn().Msgf("node %s, err in waitForAck", n.addr, err)
+				return
+			}
+			pkt := n.directlySendToNbr(transportMsg, newNbr, 0)
+			go n.waitForAck(transportMsg, newNbr, pkt.Header.PacketID)
+			// actually when timeout, you just repeat: create a new channel waiting for last sent pktId
+			n.rwmutexPktAckChannels.Lock()
+			delete(n.pktAckChannels, pktIdWaiting)
+			n.rwmutexPktAckChannels.Unlock()
+			return
+	}
+}
+
+// stop all go routines that are waiting for an ACK
+func (n *node) stopAllWaitingForACK() {
+	log.Info().Msgf("node %s n.pktAckChannels: %s", n.addr, n.pktAckChannels)
+	n.rwmutexPktAckChannels.Lock()
+	for _,ch := range n.pktAckChannels {
+		log.Info().Msgf("node %s, stopAllWatingForACK", n.addr)
+		ch <- true
+	}
+	n.rwmutexPktAckChannels.Unlock()
+	log.Info().Msgf("node %s, end of stopAllWaitingForAck", n.addr, n.pktAckChannels)
 }
 
 // when you need to process a message using a handler, you are always provided with both the message and a packet.
@@ -265,89 +324,15 @@ func (n *node) SetRoutingEntry(origin, relayAddr string) {
 	n.Unlock()
 }
 
-/* ********* handlers *********** */
-
-//// The handler. This function will be called when a chat message is received.
-//func (n* node) ExecChatMessage(msg types.Message, pkt transport.Packet) error {
-//	// cast the message to its actual type. You assume it is the right type.
-//	chatMsg, ok := msg.(*types.ChatMessage)
-//	if !ok {
-//		return xerrors.Errorf("wrong type: %T", msg)
-//	}
-//
-//	// do your stuff here with chatMsg...
-//	// log that message. Nothing else needs to be done. The ChatMessage is parsed
-//	// by the web-frontend using the message registry.
-//	log.Info().Msgf("chatMsg:%s",chatMsg)
-//	return nil
-//}
-
-// - Send back an AckMessage to the source.
-// - Process each Rumor Ʀ by checking if Ʀ is expected or not.
-// - Send the RumorMessage to another random neighbor in the case where one of the Rumor data in the packet is expected.
-//func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error {
-//	log.Info().Msgf("for node %v,  Enter ExecRumorsMessage()", n)
-//	// cast the message to its actual type. You assume it is the right type.
-//	rumorsMsg, ok := msg.(*types.RumorsMessage)
-//	if !ok {
-//		return xerrors.Errorf("wrong type: %T", msg)
-//	}
-//	log.Info().Msgf("in ExecRumorsMessage, parse out rumorsMsg:%s",rumorsMsg)
-//
-//	/* do your stuff here with rumorsMsg... */
-//	// Process each Rumor Ʀ by checking if Ʀ is expected or not
-//	atLeastOneRumorExpected := false
-//	for _,r:=range rumorsMsg.Rumors {
-//		if n.ExecRumor(r, pkt) {
-//			atLeastOneRumorExpected = true
-//		}
-//	}
-//
-//	// if one rumor is expected need to send rumorsMsg to another random neighbor
-//	if atLeastOneRumorExpected {
-//		msg:= n.wrapInTransMsgBeforeUnicastOrSend(rumorsMsg, rumorsMsg.Name())
-//		nbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
-//		if (err!=nil) {
-//			// no suitable neighbour, don't send
-//			log.Warn().Msgf("error in ExecRumorsMessage():%s", err)
-//		} else {
-//			n.Unicast(nbr, msg)
-//		}
-//	}
-//
-//	// Send back an AckMessage to the source
-//	src := pkt.Header.Source
-//	statusMsg := n.Status
-//	ackMsg := types.AckMessage{Status: statusMsg, AckedPacketID: pkt.Header.PacketID}
-//	transportMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg, ackMsg.Name())
-//	err := n.Unicast(src, transportMsg)
-//	if err != nil {
-//		log.Warn().Msgf("err in ExecRumorsMessage() when calling unicast: %s", err)
-//	}
-//
-//	return nil
-//}
-
+// todo for optimize, maybe can use the nbrs attribute and add lock to this function
 func (n *node) selectARandomNbrExcept(except string) (string, error) {
 	for dest,relay := range n.GetRoutingTable() {
-		if (dest==relay && dest!=except && dest!=n.conf.Socket.GetAddress()) {
+		if (dest==relay && dest!=except && dest!=n.addr) {
 			return dest,nil
 		}
 	}
 	return "", errors.New("no valid neighbor was found")
 }
-
-//// return whether this rumor message was expected
-//func (n *node)ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
-//	 currSeqNum, _ := n.Status[rumor.Origin]
-//	 if (currSeqNum+1) == rumor.Sequence {
-//		 pktInRumor := n.wrapMsgIntoPacket(*rumor.Msg, pkt)
-//		 n.conf.MessageRegistry.ProcessPacket(pktInRumor)
-//		 return true
-//	 } else {
-//		 return false
-//	 }
-//}
 
 // TODO how to write a generic function to wrap diff kinds of msgs to transport msg before unicast
 func (n* node) wrapInTransMsgBeforeUnicastOrSend(msg types.Message, msgName string) transport.Message{
