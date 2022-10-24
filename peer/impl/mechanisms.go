@@ -12,17 +12,18 @@ func (n* node) startAntiEntropy() chan struct{} {
 	n.antiEntropyQuitCh = quitCh
 	go func() {
 		for {
+			log.Info().Msgf("node %s in startAntiEntropy For Loop", n.addr)
 			select {
 			case <- ticker.C:
 				// send status to a random neighbor
 				destNbr,err := n.selectARandomNbrExcept("")
 				if (err!=nil) {
-					log.Warn().Msgf("err in startAntiEntropy: %s",err)
+					log.Warn().Msgf("node %s err in startAntiEntropy: %s", n.addr, err)
 				}
 				msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
 				err = n.Unicast(destNbr, msg)
 				if err != nil {
-					log.Warn().Msgf("err in startAntiEntropy: %s",err)
+					log.Warn().Msgf("node %s err in startAntiEntropy: %s", n.addr, err)
 				}
 			case <-quitCh:
 				ticker.Stop()
@@ -34,8 +35,11 @@ func (n* node) startAntiEntropy() chan struct{} {
 }
 
 func (n* node) stopAntiEntropy() {
+	log.Info().Msgf("node %s, stopAntiEntropy n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 	if (n.antiEntropyQuitCh != nil) {
+		log.Info().Msgf("node %s, stopAntiEntropy(), in if before close n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 		close(n.antiEntropyQuitCh)
+		log.Info().Msgf("node %s, stopAntiEntropy(), in if after close n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 	}
 }
 

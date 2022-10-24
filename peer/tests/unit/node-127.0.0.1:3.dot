@@ -1,0 +1,13 @@
+digraph routing_table {
+labelloc="t";label = <Routing Table <font point-size='10'><br/>(generated 24 Oct 22 - 17:12:10)</font>>;
+
+graph [fontname = "helvetica"];
+graph [fontname = "helvetica"];
+node [fontname = "helvetica"];
+edge [fontname = "helvetica"];
+
+"NODE" -> "127.0.0.1:1";
+"127.0.0.1:1" -> "127.0.0.1:2";
+"NODE" -> "127.0.0.1:4";
+"NODE" -> "127.0.0.1:3";
+}

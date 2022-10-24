@@ -43,7 +43,7 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 		}
 	}
 
-	// Send back an AckMessage to the source. need to add src to my routing table
+	// Send back an AckMessage to the relayby. need to add src to my routing table
 	// if this is my own message, no need to reply ack
 	src := pkt.Header.Source
 	if (src==n.addr) {
@@ -57,10 +57,13 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 	}
 	transportMsg := transport.Message{Type: ackMsg.Name(), Payload: data}
 	//transportMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg, ackMsg.Name())
-	err = n.Unicast(src, transportMsg)
-	if err != nil {
-		log.Warn().Msgf("node %s , err in ExecRumorsMessage() when calling unicast: %s", n.addr, err)
-	}
+	n.directlySendToNbr(transportMsg, pkt.Header.RelayedBy, 0)
+
+	// used to be unicast ack to src
+	//err = n.Unicast(src, transportMsg)
+	//if err != nil {
+	//	log.Warn().Msgf("node %s , err in ExecRumorsMessage() when calling unicast: %s", n.addr, err)
+	//}
 
 	return nil
 }
@@ -76,6 +79,10 @@ func (n *node) ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
 		}
 		n.Status[rumor.Origin] = currSeqNum+1
 		n.rumorsReceived[rumor.Origin] = append(n.rumorsReceived[rumor.Origin], rumor)
+		_, originIsNbr := n.nbrs[rumor.Origin]
+		if !originIsNbr {
+			n.SetRoutingEntry(rumor.Origin, pkt.Header.RelayedBy)
+		}
 		return true
 	} else {
 		return false
@@ -105,10 +112,7 @@ func (n* node) ExecAckMessage(msg types.Message, pkt transport.Packet) error {
 	}
 	// todo maybe should use a diff lock for each data structure
 	// notify the go routine waiting for pktId that we received ack for it
-	//n.rwmutexPktAckChannels.Lock()
-	//ch := n.pktAckChannels[pkt.Header.PacketID]
-	//ch <- true
-	//n.rwmutexPktAckChannels.Unlock()
+	n.notifyAckChannel(ackMsg.AckedPacketID)
 
 	// process the status message inside the ack message
 	statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg.Status, ackMsg.Status.Name())
