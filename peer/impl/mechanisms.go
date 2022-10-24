@@ -16,7 +16,7 @@ func (n* node) startAntiEntropy() chan struct{} {
 			select {
 			case <- ticker.C:
 				// send status to a random neighbor
-				destNbr,err := n.selectARandomNbrExcept("")
+				destNbr,err := n.nbrSet.selectARandomNbrExcept("")
 				if (err!=nil) {
 					log.Warn().Msgf("node %s err in startAntiEntropy: %s", n.addr, err)
 				}

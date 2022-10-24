@@ -31,7 +31,7 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 	// when you spread a rumor the source should still be the original src
 	if atLeastOneRumorExpected {
 		msg:= n.wrapInTransMsgBeforeUnicastOrSend(rumorsMsg, rumorsMsg.Name())
-		nbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
+		nbr,err := n.nbrSet.selectARandomNbrExcept(pkt.Header.Source)
 		if (err!=nil) {
 			// no suitable neighbour, don't send
 			log.Warn().Msgf("node %s error in ExecRumorsMessage():%s", n.addr, err)
@@ -49,7 +49,7 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 	if (src==n.addr) {
 		return nil
 	}
-	n.SetRoutingEntry(src, pkt.Header.RelayedBy)
+	//n.SetRoutingEntry(src, pkt.Header.RelayedBy)
 	ackMsg := types.AckMessage{Status: n.Status, AckedPacketID: pkt.Header.PacketID} //todo refactor wrapping into overloading funcs
 	data,err := json.Marshal(ackMsg)
 	if (err!=nil) {
@@ -79,7 +79,7 @@ func (n *node) ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
 		}
 		n.Status[rumor.Origin] = currSeqNum+1
 		n.rumorsReceived[rumor.Origin] = append(n.rumorsReceived[rumor.Origin], rumor)
-		_, originIsNbr := n.nbrs[rumor.Origin]
+		originIsNbr := n.nbrSet.contains(rumor.Origin)
 		if !originIsNbr {
 			n.SetRoutingEntry(rumor.Origin, pkt.Header.RelayedBy)
 		}
@@ -112,7 +112,7 @@ func (n* node) ExecAckMessage(msg types.Message, pkt transport.Packet) error {
 	}
 	// todo maybe should use a diff lock for each data structure
 	// notify the go routine waiting for pktId that we received ack for it
-	n.notifyAckChannel(ackMsg.AckedPacketID)
+	n.pktAckChannels.notifyAckChannel(ackMsg.AckedPacketID)
 
 	// process the status message inside the ack message
 	statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg.Status, ackMsg.Status.Name())
@@ -195,7 +195,7 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 		// With a certain probability, peer P sends a status message to a random neighbor,
 		// different from the one it received the status from.
 		if rand.Float64() < n.conf.ContinueMongering {
-			newNbr,err := n.selectARandomNbrExcept(pkt.Header.Source)
+			newNbr,err := n.nbrSet.selectARandomNbrExcept(pkt.Header.Source)
 			if (err!=nil) {
 				log.Warn().Msgf("Node %s,In ExecStatusMessage, err: %s", n.addr, err)
 			}
@@ -222,6 +222,7 @@ func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string, ttl u
 	}
 	err := n.conf.Socket.Send(nbr, newPkt, 0)
 	if err != nil {
+		log.Warn().Msgf("node %s, send to nbr %s, in directlySendToNbr() err: %s", n.addr,nbr, err)
 		log.Warn().Msgf("in directlySendToNbr() err: %s", err)
 	}
 	return newPkt

@@ -23,11 +23,13 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	routingTable[conf.Socket.GetAddress()]= conf.Socket.GetAddress()
 	stopSig := make(chan bool, 1)
 	status := make(map[string]uint)
-	nbrs := make(map[string]bool)
+	nbrsMap := make(map[string]bool)
+	nbrs := nbrSet{nbrs: nbrsMap}
 	rumorsReceived := make(map[string][]types.Rumor)
-	pktAckChannels := make(map[string]chan bool)
+	channelsMap := make(map[string]chan bool)
+	pktAckChannels := chanPool{pktAckChannels: channelsMap}
 
-	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrs: nbrs, rumorsReceived: rumorsReceived, pktAckChannels: pktAckChannels}
+	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrSet: nbrs, rumorsReceived: rumorsReceived, pktAckChannels: pktAckChannels}
 }
 
 // node implements a peer to build a Peerster system
@@ -42,13 +44,13 @@ type node struct {
 	sync.RWMutex
 	sequenceNumber uint // sequence number of last created
 	Status types.StatusMessage
-	nbrs   map[string]bool
+	nbrSet nbrSet
 	addr   string
 	antiEntropyQuitCh chan struct{} // initialized when starting antiEntropy mechanism
 	heartbeatQuitCh chan struct{} // initialized when starting heartbeat mechanism
 	rumorsReceived map[string][]types.Rumor
-	pktAckChannels map[string]chan bool
-	rwmutexPktAckChannels sync.RWMutex
+	pktAckChannels chanPool
+	//rwmutexPktAckChannels sync.RWMutex
 }
 
 // Start implements peer.Service
@@ -128,7 +130,7 @@ func (n *node) Stop() error {
 	log.Info().Msgf("trying to stop() node %s, after stopAntiEntropy", n.addr)
 	n.stopHeartbeat()
 	log.Info().Msgf("trying to stop() node %s, after stopHeartBeat", n.addr)
-	n.stopAllWaitingForACK()
+	n.pktAckChannels.stopAllWaitingForACK()
 	log.Info().Msgf("trying to stop() node %s, after stopAllWaitingForACK", n.addr)
 	return nil
 }
@@ -137,7 +139,9 @@ func (n *node) Stop() error {
 func (n *node) Unicast(dest string, msg transport.Message) error {
 	//panic("to be implemented in HW0")
 	// check if destination is my neighbour, i.e. in my routing table
+	n.Lock()
 	nextHop,ok := n.routingTable[dest]
+	n.Unlock()
 	if (ok) {
 		// relay should be the address of node who sends the package
 		header := transport.NewHeader(n.conf.Socket.GetAddress(), n.conf.Socket.GetAddress(), dest, 0)
@@ -197,13 +201,13 @@ func (n *node) createRumor(msg transport.Message) types.Rumor {
 //		Payload: data,
 //	}
 //
-//	log.Info().Msgf("node broadcast() n.nbrs=%s",n.nbrs)
+//	log.Info().Msgf("node broadcast() n.nbrSet=%s",n.nbrSet)
 //
 //
-//	log.Info().Msgf("node %s in Broadcast() no neighbour, n.nbrs = %s:" , n.addr, n.nbrs )
+//	log.Info().Msgf("node %s in Broadcast() no neighbour, n.nbrSet = %s:" , n.addr, n.nbrSet )
 //
 //	var randNbr string
-//	for randNbr = range(n.nbrs) {
+//	for randNbr = range(n.nbrSet) {
 //		log.Info().Msgf("**** !!@##@node %s in Broadcast, send to %s, ", n.addr, randNbr)
 //		break
 //	}
@@ -309,7 +313,7 @@ func (n *node) AddPeer(addr ...string) {
 
 	for _,oneAddr := range addr {
 		n.SetRoutingEntry(oneAddr, oneAddr)
-		n.nbrs[oneAddr] = true
+		n.nbrSet.addNbr(oneAddr)
 	}
 
 }
@@ -335,22 +339,23 @@ func (n *node) SetRoutingEntry(origin, relayAddr string) {
 	} else {
 		n.routingTable[origin] = relayAddr
 		if (origin==relayAddr && origin!=n.addr) {
-			// this is a peer, add it to nbrs
-			n.nbrs[origin] = true
+			// this is a peer, add it to nbrSet
+			//n.nbrSet[origin] = true
+			n.nbrSet.addNbr(origin)
 		}
 	}
 	n.Unlock()
 }
 
-// todo for optimize, maybe can use the nbrs attribute and add lock to this function
-func (n *node) selectARandomNbrExcept(except string) (string, error) {
-	for dest,relay := range n.GetRoutingTable() {
-		if (dest==relay && dest!=except && dest!=n.addr) {
-			return dest,nil
-		}
-	}
-	return "", errors.New("no valid neighbor was found")
-}
+// todo for optimize, maybe can use the nbrSet attribute and add lock to this function
+//func (n *node) selectARandomNbrExcept(except string) (string, error) {
+//	for dest,relay := range n.GetRoutingTable() {
+//		if (dest==relay && dest!=except && dest!=n.addr) {
+//			return dest,nil
+//		}
+//	}
+//	return "", errors.New("no valid neighbor was found")
+//}
 
 // TODO how to write a generic function to wrap diff kinds of msgs to transport msg before unicast
 func (n* node) wrapInTransMsgBeforeUnicastOrSend(msg types.Message, msgName string) transport.Message{

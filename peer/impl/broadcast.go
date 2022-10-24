@@ -25,15 +25,14 @@ func (n *node) Broadcast(msg transport.Message) error {
 		Payload: data,
 	}
 
-	log.Info().Msgf("node broadcast() n.nbrs=%s",n.nbrs)
-
-
-	log.Info().Msgf("node %s in Broadcast() no neighbour, n.nbrs = %s:" , n.addr, n.nbrs )
-
-	var randNbr string
-	for randNbr = range(n.nbrs) {
-		log.Info().Msgf("**** !!@##@node %s in Broadcast, send to %s, ", n.addr, randNbr)
-		break
+	//var randNbr string
+	//for randNbr = range(n.nbrSet) {
+	//	log.Info().Msgf("**** !!@##@node %s in Broadcast, send to %s, ", n.addr, randNbr)
+	//	break
+	//}
+	randNbr,err := n.nbrSet.selectARandomNbrExcept("")
+	if (err!=nil) {
+		log.Info().Msgf("node %s, in broadcast after selectARandomNbrExcept, err: %s", n.addr, err)
 	}
 	pkt := n.directlySendToNbr(transportMsg, randNbr, 0)
 	//err = n.Unicast(randNbr, transportMsg)
@@ -64,17 +63,17 @@ func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktId 
 	for {
 		log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s, inside the for loop",n.addr, pktId)
 		ch := make(chan bool, 5)
-		n.setAckChannel(pktId, ch)
+		n.pktAckChannels.setAckChannel(pktId, ch)
 		select {
 		case <- ch:
 			log.Info().Msgf("node %s recevied ack for pktId %s", n.addr, pktId)
 			close(ch)
-			n.deleteAckChannel(pktId)
+			n.pktAckChannels.deleteAckChannel(pktId)
 			return
 		case <- time.After(n.conf.AckTimeout):
 			log.Info().Msgf("node %s waitForAck() pktIdwaiting %s time out", n.addr, pktId)
 			// select a different nbr to send
-			newNbr,err := n.selectARandomNbrExcept(prevNbr)
+			newNbr,err := n.nbrSet.selectARandomNbrExcept(prevNbr)
 			if (err != nil) {
 				log.Info().Msgf("node %s waitFor ack err: %s" ,err)
 			}
@@ -83,3 +82,5 @@ func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktId 
 		}
 	}
 }
+
+
