@@ -369,11 +369,11 @@ func Test_HW1_Messaging_Heartbeat(t *testing.T) {
 //
 //	A->B: Rumor    send to a random neighbor (could be C)
 //	A<-B: Ack
-//	A->C: StatusMsg   continue mongering
-//	A<-C: StatusMsg   missing rumor, send back status
+//	A->C: Status   continue mongering
+//	A<-C: Status   missing rumor, send back status
 //	A->C: Rumor    send missing rumor
 //	A<-C: Ack
-//	A->B: StatusMsg   continue mongering, in sync: nothing to do
+//	A->B: Status   continue mongering, in sync: nothing to do
 //
 // Here A sends first to B, but it could be C, which would inverse B and C.
 func Test_HW1_Messaging_Broadcast_ContinueMongering(t *testing.T) {

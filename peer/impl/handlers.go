@@ -165,21 +165,20 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 		msgToUnicast := n.wrapInTransMsgBeforeUnicastOrSend(rumorsMessage, rumorsMessage.Name())
 		n.directlySendToNbr(msgToUnicast, pkt.Header.Source)  // to do should ttl be 0 ?
 	}
-	if !otherHasNew && !IHaveNew {
+	if !otherHasNew && !IHaveNew &&  rand.Float64() < n.conf.ContinueMongering{
 		// me and nbr have same status
 		// With a certain probability, peer P sends a status message to a random neighbor,
 		// different from the one it received the status from.
-		if rand.Float64() < n.conf.ContinueMongering {
-			newNbr,err := n.nbrSet.selectARandomNbrExcept(pkt.Header.Source)
-			if (err!=nil) {
-				log.Warn().Msgf("Node %s,In ExecStatusMessage, err: %s", n.addr, err)
-			}
-			if newNbr!="" {
-				// successfully get a random nbr
-				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(),
-					n.Status.getStatusMsg().Name())
-				n.directlySendToNbr(statusMsg, newNbr)
-			}
+
+		newNbr,err := n.nbrSet.selectARandomNbrExcept(pkt.Header.Source)
+		if (err!=nil) {
+			log.Warn().Msgf("Node %s,In ExecStatusMessage, err: %s", n.addr, err)
+		}
+		if newNbr!="" {
+			// successfully get a random nbr
+			statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(),
+				n.Status.getStatusMsg().Name())
+			n.directlySendToNbr(statusMsg, newNbr)
 		}
 
 	}
