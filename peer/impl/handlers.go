@@ -50,14 +50,14 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 		return nil
 	}
 	//n.SetRoutingEntry(src, pkt.Header.RelayedBy)
-	ackMsg := types.AckMessage{Status: n.Status.getStatusMsg(), AckedPacketID: pkt.Header.PacketID} //todo refactor wrapping into overloading funcs
+	ackMsg := types.AckMessage{Status: n.Status.getStatusMsg(), AckedPacketID: pkt.Header.PacketID}
 	data,err := json.Marshal(ackMsg)
 	if (err!=nil) {
 		log.Warn().Msgf("node %s, err in ExecRumorsMessage: %s", n.addr, err)
 	}
 	transportMsg := transport.Message{Type: ackMsg.Name(), Payload: data}
 	//transportMsg := n.wrapInTransMsgBeforeUnicastOrSend(ackMsg, ackMsg.Name())
-	n.directlySendToNbr(transportMsg, pkt.Header.RelayedBy, 0)
+	n.directlySendToNbr(transportMsg, pkt.Header.RelayedBy)
 
 	// used to be unicast ack to src
 	//err = n.Unicast(src, transportMsg)
@@ -113,7 +113,7 @@ func (n* node) ExecAckMessage(msg types.Message, pkt transport.Packet) error {
 	if !ok {
 		return xerrors.Errorf("wrong type: %T", msg)
 	}
-	// todo maybe should use a diff lock for each data structure
+
 	// notify the go routine waiting for pktId that we received ack for it
 	n.pktAckChannels.notifyAckChannel(ackMsg.AckedPacketID)
 
@@ -136,12 +136,14 @@ func (n *node) ExecPrivateMessage(msg types.Message, pkt transport.Packet) error
 	_,IamRecipient := privateMsg.Recipients[n.addr]
 	if IamRecipient {
 		newPkt :=n.wrapMsgIntoPacket(*privateMsg.Msg, pkt)
-		n.conf.MessageRegistry.ProcessPacket(newPkt)
+		err := n.conf.MessageRegistry.ProcessPacket(newPkt)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// todo should this be locked?
 func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error {
 	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage()", n.addr)
 	statusMsg, ok := msg.(*types.StatusMessage)
@@ -149,51 +151,20 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 		return xerrors.Errorf("wrong type: %T", msg)
 	}
 
-	//IHaveNew := false
-	//otherHasNew := false
-	//var rumorsNeedToSend []types.Rumor
-	//log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.rumosReceived=%s, ", n.addr, n.rumorsReceived)
-	//log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), received statusMsg=%s, ", n.addr, statusMsg)
-	////log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.StatusMsg=%s, ", n.addr, n.Status)
-	//
-	//// should loop thru the union of statusMsg.key and n.StatusMsg.key.... yeah.. they might even have same size
-	//// but different keys
-	//for node,othersSeq := range *statusMsg {
-	//	mySeq := n.Status[node]
-	//	if (mySeq < othersSeq) {
-	//		otherHasNew = true
-	//	} else if (mySeq > othersSeq) {
-	//		// I have more than this node, so I send all rumors I received but she doesn't have to her in one rumorsMsg
-	//
-	//		// seq num starts from one, index starts from 0
-	//		// othersIndex = otherSeq - 1, myIndex = mySeq-1, want [othersIndex+1:myIndex+1]
-	//		IHaveNew = true
-	//		rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][othersSeq:mySeq]...)
-	//	}
-	//}
-	//// check for node that exist in my status but not in other's status message
-	//for node,mySeq := range n.Status {
-	//	_, inOthers := (*statusMsg)[node]
-	//	if (!inOthers) {
-	//		// for node, I have 1,...,mySeq the other has none, so send index [0, mySeq)
-	//		IHaveNew = true
-	//		rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][:mySeq]...)
-	//	}
-	//}
-
 	IHaveNew, otherHasNew, rumorsNeedToSend := n.Status.compareWithOthersStatus(statusMsg)
 
-	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
+	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), " +
+		"otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
 	if otherHasNew {
 		// I have less than this node, so I send my status to this node and it will send back more messages
 		msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(), n.Status.getStatusMsg().Name())
-		n.directlySendToNbr(msg, pkt.Header.Source, 0) // todo should ttl be 0 ?
+		n.directlySendToNbr(msg, pkt.Header.Source)
 	}
 	if IHaveNew {
 		// send the accumulated rumors as a rumorsMsg to the peer
 		rumorsMessage := types.RumorsMessage{Rumors: rumorsNeedToSend}
 		msgToUnicast := n.wrapInTransMsgBeforeUnicastOrSend(rumorsMessage, rumorsMessage.Name())
-		n.directlySendToNbr(msgToUnicast, pkt.Header.Source, 0)  // to do should ttl be 0 ?
+		n.directlySendToNbr(msgToUnicast, pkt.Header.Source)  // to do should ttl be 0 ?
 	}
 	if !otherHasNew && !IHaveNew {
 		// me and nbr have same status
@@ -206,8 +177,9 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 			}
 			if newNbr!="" {
 				// successfully get a random nbr
-				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(), n.Status.getStatusMsg().Name())
-				n.directlySendToNbr(statusMsg, newNbr, 0)
+				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(),
+					n.Status.getStatusMsg().Name())
+				n.directlySendToNbr(statusMsg, newNbr)
 			}
 		}
 
@@ -219,8 +191,8 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
  * this function does not use routing table but directly use Send() to send back to nbr
  * @return packet it sent
  */
-func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string, ttl uint) transport.Packet {
-	header := transport.NewHeader(n.addr, n.addr, nbr, ttl)
+func (n *node) directlySendToNbr(msgToReply transport.Message, nbr string) transport.Packet {
+	header := transport.NewHeader(n.addr, n.addr, nbr, 0)
 	newPkt := transport.Packet{
 		Header: &header,
 		Msg:    &msgToReply,

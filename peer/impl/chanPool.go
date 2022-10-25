@@ -10,33 +10,32 @@ type chanPool struct {
 	sync.Mutex
 }
 
-func(c *chanPool) getAckChannel(pktId string) (chan bool, bool){
+func(c *chanPool) getAckChannel(pktID string) (chan bool, bool){
 	c.Lock()
 	defer c.Unlock()
-	ch, ok := c.pktAckChannels[pktId]
+	ch, ok := c.pktAckChannels[pktID]
 
 	return ch,ok
 }
 
-func (c *chanPool) setAckChannel(pktId string, ch chan bool) {
+func (c *chanPool) setAckChannel(pktID string, ch chan bool) {
 	c.Lock()
 	defer c.Unlock()
-	c.pktAckChannels[pktId] = ch
+	c.pktAckChannels[pktID] = ch
 }
 
-func (c *chanPool) deleteAckChannel(pktId string) {
+func (c *chanPool) deleteAckChannel(pktID string) {
 	c.Lock()
 	defer c.Unlock()
-	delete(c.pktAckChannels, pktId)
+	delete(c.pktAckChannels, pktID)
 }
 
-func(c *chanPool) notifyAckChannel(pktId string) {
-	ch, ok := c.getAckChannel(pktId)
+func(c *chanPool) notifyAckChannel(pktID string) {
+	ch, ok := c.getAckChannel(pktID)
 	if !ok {
 		return
 	}
 	ch <- true
-	return
 }
 
 // stop all go routines that are waiting for an ACK

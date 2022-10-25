@@ -35,11 +35,9 @@ func (n* node) startAntiEntropy() chan struct{} {
 }
 
 func (n* node) stopAntiEntropy() {
-	log.Info().Msgf("node %s, stopAntiEntropy n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
+	//log.Info().Msgf("node %s, stopAntiEntropy n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 	if (n.antiEntropyQuitCh != nil) {
-		log.Info().Msgf("node %s, stopAntiEntropy(), in if before close n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 		close(n.antiEntropyQuitCh)
-		log.Info().Msgf("node %s, stopAntiEntropy(), in if after close n.antiEntropyQuitCh %s", n.addr, n.antiEntropyQuitCh)
 	}
 }
 
@@ -58,7 +56,7 @@ func (n* node) startHeartbeat() chan struct{} {
 				msg := n.wrapInTransMsgBeforeUnicastOrSend(emptyMsg, emptyMsg.Name())
 				err := n.Broadcast(msg)
 				if err != nil {
-					log.Warn().Msgf("node %s error in startHeartbeat err:", n.addr, err)
+					log.Warn().Msgf("node %s error in startHeartbeat err: %s", n.addr, err)
 				}
 
 			case <-quitCh:

@@ -11,11 +11,11 @@ type status struct {
 	sync.Mutex
 }
 
-func (status *status) incrementSeqForNode(node string) {
-	status.Lock()
-	defer status.Unlock()
-	status.StatusMsg[node] = status.StatusMsg[node]+1
-}
+//func (status *status) incrementSeqForNode(node string) {
+//	status.Lock()
+//	defer status.Unlock()
+//	status.StatusMsg[node] = status.StatusMsg[node]+1
+//}
 
 func (status *status) getSeqForNode(node string) uint {
 	status.Lock()
@@ -23,11 +23,11 @@ func (status *status) getSeqForNode(node string) uint {
 	return status.StatusMsg[node]
 }
 
-func (status *status) setSeqForNode(node string, newSeq uint) {
-	status.Lock()
-	defer status.Unlock()
-	status.StatusMsg[node] = newSeq
-}
+//func (status *status) setSeqForNode(node string, newSeq uint) {
+//	status.Lock()
+//	defer status.Unlock()
+//	status.StatusMsg[node] = newSeq
+//}
 
 func (status *status) getStatusMsg() types.StatusMessage {
 
@@ -52,7 +52,7 @@ func (status *status) compareWithOthersStatus(statusMsg *types.StatusMessage) (b
 			otherHasNew = true
 		} else if (mySeq > othersSeq) {
 			// I have more than this node, so I send all rumors I received but she doesn't have to her in one rumorsMsg
-			// todo concatenate all my additional rumors for each peer
+			// concatenate all my additional rumors for each peer
 			// seq num starts from one, index starts from 0
 			// othersIndex = otherSeq - 1, myIndex = mySeq-1, want [othersIndex+1:myIndex+1]
 			IHaveNew = true

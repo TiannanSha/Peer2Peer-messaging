@@ -9,9 +9,9 @@ import (
 )
 
 // Broadcast implements peer.messaging
-//- Create a RumorsMessage containing one Rumor (this rumor embeds the message provided in argument), and send it to a random neighbour.
+//- Create a RumorsMessage containing one Rumor (this rumor embeds the message provided in argument),
+//  and send it to a random neighbour.
 //- Process the message locally
-// todo since send to immediate nbr, can use send instead of unicast
 func (n *node) Broadcast(msg transport.Message) error {
 	rumor := n.createRumor(msg)
 	rumors := []types.Rumor{rumor}
@@ -34,7 +34,7 @@ func (n *node) Broadcast(msg transport.Message) error {
 	if (err!=nil) {
 		log.Info().Msgf("node %s, in broadcast after selectARandomNbrExcept, err: %s", n.addr, err)
 	}
-	pkt := n.directlySendToNbr(transportMsg, randNbr, 0)
+	pkt := n.directlySendToNbr(transportMsg, randNbr)
 	//err = n.Unicast(randNbr, transportMsg)
 	//if (err!=nil) {
 	//	log.Warn().Msgf("error in broadcast() after unicast:%s", err)
@@ -55,29 +55,29 @@ func (n *node) Broadcast(msg transport.Message) error {
 	return nil
 }
 
-func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktId string) {
+func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktID string) {
 	if (n.conf.AckTimeout==0) { // todo change to ==0
 		return
 	}
-	log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s",n.addr, pktId)
+	log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s",n.addr, pktID)
 	for {
-		log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s, inside the for loop",n.addr, pktId)
+		log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s, inside the for loop",n.addr, pktID)
 		ch := make(chan bool, 5)
-		n.pktAckChannels.setAckChannel(pktId, ch)
+		n.pktAckChannels.setAckChannel(pktID, ch)
 		select {
 		case <- ch:
-			log.Info().Msgf("node %s recevied ack for pktId %s", n.addr, pktId)
+			log.Info().Msgf("node %s recevied ack for pktId %s", n.addr, pktID)
 			close(ch)
-			n.pktAckChannels.deleteAckChannel(pktId)
+			n.pktAckChannels.deleteAckChannel(pktID)
 			return
 		case <- time.After(n.conf.AckTimeout):
-			log.Info().Msgf("node %s waitForAck() pktIdwaiting %s time out", n.addr, pktId)
+			log.Info().Msgf("node %s waitForAck() pktIdwaiting %s time out", n.addr, pktID)
 			// select a different nbr to send
 			newNbr,err := n.nbrSet.selectARandomNbrExcept(prevNbr)
 			if (err != nil) {
-				log.Info().Msgf("node %s waitFor ack err: %s" ,err)
+				log.Info().Msgf("node %s waitFor ack err: %s" ,n.addr, err)
 			}
-			n.directlySendToNbr(transportMsg, newNbr, 0)
+			n.directlySendToNbr(transportMsg, newNbr)
 			continue
 		}
 	}

@@ -15,16 +15,15 @@ func (nbrSet *nbrSet) selectARandomNbrExcept(except string) (string, error) {
 	nbrSet.Lock()
 	defer nbrSet.Unlock()
 	var candidates []string
-	for nbr,_ := range nbrSet.nbrs {
+	for nbr := range nbrSet.nbrs {
 		if (nbr != except) {
 			candidates = append(candidates,nbr)
 		}
 	}
 	if len(candidates)==0 {
 		return "", errors.New("no valid neighbor was found")
-	} else {
-		return candidates[rand.Intn(len(candidates))], nil
 	}
+	return candidates[rand.Intn(len(candidates))], nil
 }
 
 func (nbrSet *nbrSet) addNbr(newNbr string) {
