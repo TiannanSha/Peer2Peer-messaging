@@ -87,9 +87,8 @@ func (n *node) ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
 			n.SetRoutingEntry(rumor.Origin, pkt.Header.RelayedBy)
 		}
 		return true
-	} else {
-		return false
 	}
+	return false
 }
 
 // The handler. This function will be called when a chat message is received.
@@ -122,7 +121,7 @@ func (n* node) ExecAckMessage(msg types.Message, pkt transport.Packet) error {
 	newPkt := n.wrapMsgIntoPacket(statusMsg, pkt)
 	err := n.conf.MessageRegistry.ProcessPacket(newPkt)
 	if err != nil {
-		log.Info().Msgf("node %s err in ExecAckMessage():", n.addr, err)
+		log.Info().Msgf("node %s err in ExecAckMessage(): %s", n.addr, err)
 	}
 
 	return nil
@@ -153,8 +152,8 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 
 	IHaveNew, otherHasNew, rumorsNeedToSend := n.Status.compareWithOthersStatus(statusMsg)
 
-	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), " +
-		"otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
+	//log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), " +
+	//	"otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
 	if otherHasNew {
 		// I have less than this node, so I send my status to this node and it will send back more messages
 		msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(), n.Status.getStatusMsg().Name())

@@ -56,7 +56,7 @@ func (n *node) Broadcast(msg transport.Message) error {
 }
 
 func (n *node) waitForAck(transportMsg transport.Message, prevNbr string, pktID string) {
-	if (n.conf.AckTimeout==0) { // todo change to ==0
+	if (n.conf.AckTimeout==0) {
 		return
 	}
 	log.Info().Msgf("node %s waitForAck() pktIdWaiting = %s",n.addr, pktID)

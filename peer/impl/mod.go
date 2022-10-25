@@ -27,13 +27,12 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	Status := status{StatusMsg: statusMsg, rumorsReceived: rumorsReceived}
 	nbrsMap := make(map[string]bool)
 	nbrs := nbrSet{nbrs: nbrsMap}
-	//rumorsReceived := make(map[string][]types.Rumor)
 	channelsMap := make(map[string]chan bool)
 	pktAckChannels := chanPool{pktAckChannels: channelsMap}
 
 
-	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, Status: Status,
-		addr: conf.Socket.GetAddress(), nbrSet: nbrs, pktAckChannels: pktAckChannels}
+	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, Status: &Status,
+		addr: conf.Socket.GetAddress(), nbrSet: &nbrs, pktAckChannels: &pktAckChannels}
 }
 
 // node implements a peer to build a Peerster system
@@ -47,13 +46,13 @@ type node struct {
 	routingTable peer.RoutingTable
 	sync.RWMutex
 	//sequenceNumber uint // sequence number of last created
-	Status status
-	nbrSet nbrSet
+	Status *status
+	nbrSet *nbrSet
 	addr   string
 	antiEntropyQuitCh chan struct{} // initialized when starting antiEntropy mechanism
 	heartbeatQuitCh chan struct{} // initialized when starting heartbeat mechanism
 	//rumorsReceived map[string][]types.Rumor
-	pktAckChannels chanPool
+	pktAckChannels *chanPool
 	//rwmutexPktAckChannels sync.RWMutex
 }
 
