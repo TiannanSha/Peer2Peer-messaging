@@ -20,7 +20,7 @@ func (n* node) startAntiEntropy() chan struct{} {
 				if (err!=nil) {
 					log.Warn().Msgf("node %s err in startAntiEntropy: %s", n.addr, err)
 				}
-				msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
+				msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(),n.Status.getStatusMsg().Name())
 				err = n.Unicast(destNbr, msg)
 				if err != nil {
 					log.Warn().Msgf("node %s err in startAntiEntropy: %s", n.addr, err)

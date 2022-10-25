@@ -22,14 +22,17 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	routingTable := make(map[string]string)
 	routingTable[conf.Socket.GetAddress()]= conf.Socket.GetAddress()
 	stopSig := make(chan bool, 1)
-	status := make(map[string]uint)
+	statusMsg := make(map[string]uint)
+	rumorsReceived := make(map[string][]types.Rumor)
+	Status := status{StatusMsg: statusMsg, rumorsReceived: rumorsReceived}
 	nbrsMap := make(map[string]bool)
 	nbrs := nbrSet{nbrs: nbrsMap}
-	rumorsReceived := make(map[string][]types.Rumor)
+	//rumorsReceived := make(map[string][]types.Rumor)
 	channelsMap := make(map[string]chan bool)
 	pktAckChannels := chanPool{pktAckChannels: channelsMap}
 
-	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, sequenceNumber: 0, Status: status, addr: conf.Socket.GetAddress(), nbrSet: nbrs, rumorsReceived: rumorsReceived, pktAckChannels: pktAckChannels}
+
+	return &node{conf:conf, routingTable: routingTable, stopSigCh: stopSig, Status: Status, addr: conf.Socket.GetAddress(), nbrSet: nbrs, pktAckChannels: pktAckChannels}
 }
 
 // node implements a peer to build a Peerster system
@@ -42,13 +45,13 @@ type node struct {
 	stopSigCh chan bool
 	routingTable peer.RoutingTable
 	sync.RWMutex
-	sequenceNumber uint // sequence number of last created
-	Status types.StatusMessage
+	//sequenceNumber uint // sequence number of last created
+	Status status
 	nbrSet nbrSet
 	addr   string
 	antiEntropyQuitCh chan struct{} // initialized when starting antiEntropy mechanism
 	heartbeatQuitCh chan struct{} // initialized when starting heartbeat mechanism
-	rumorsReceived map[string][]types.Rumor
+	//rumorsReceived map[string][]types.Rumor
 	pktAckChannels chanPool
 	//rwmutexPktAckChannels sync.RWMutex
 }
@@ -177,10 +180,11 @@ func (n *node) Relay(src string, dest string, msg transport.Message) error {
 func (n *node) createRumor(msg transport.Message) types.Rumor {
 	n.Lock()
 	defer n.Unlock()
-	n.sequenceNumber++;
-	rumor := types.Rumor{Origin: n.conf.Socket.GetAddress(), Sequence: n.sequenceNumber, Msg: &msg}
-	n.Status[n.addr] = n.Status[n.addr]+1
-	n.rumorsReceived[n.addr] = append(n.rumorsReceived[n.addr], rumor)
+	myCurrSeq := n.Status.getSeqForNode(n.addr)
+	rumor := types.Rumor{Origin: n.conf.Socket.GetAddress(), Sequence: myCurrSeq+1, Msg: &msg}
+	//n.Status[n.addr] = n.Status[n.addr]+1
+	//n.rumorsReceived[n.addr] = append(n.rumorsReceived[n.addr], rumor)
+	n.Status.updateForNewRumorFromNode(n.addr, rumor)
 	return rumor
 }
 

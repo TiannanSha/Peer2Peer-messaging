@@ -50,7 +50,7 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 		return nil
 	}
 	//n.SetRoutingEntry(src, pkt.Header.RelayedBy)
-	ackMsg := types.AckMessage{Status: n.Status, AckedPacketID: pkt.Header.PacketID} //todo refactor wrapping into overloading funcs
+	ackMsg := types.AckMessage{Status: n.Status.getStatusMsg(), AckedPacketID: pkt.Header.PacketID} //todo refactor wrapping into overloading funcs
 	data,err := json.Marshal(ackMsg)
 	if (err!=nil) {
 		log.Warn().Msgf("node %s, err in ExecRumorsMessage: %s", n.addr, err)
@@ -70,15 +70,18 @@ func (n* node) ExecRumorsMessage(msg types.Message, pkt transport.Packet) error 
 
 // return whether this rumor message was expected
 func (n *node) ExecRumor(rumor types.Rumor, pkt transport.Packet) bool {
-	currSeqNum, _ := n.Status[rumor.Origin]
+	//currSeqNum, _ := n.StatusMsg[rumor.Origin]
+	currSeqNum := n.Status.getSeqForNode(rumor.Origin)
 	if (currSeqNum+1) == rumor.Sequence {
 		pktInRumor := n.wrapMsgIntoPacket(*rumor.Msg, pkt)
 		err := n.conf.MessageRegistry.ProcessPacket(pktInRumor)
 		if err != nil {
 			log.Warn().Msgf("node %s in ExecRumor(), ProcessPacket returns error: %s", n.addr, err)
 		}
-		n.Status[rumor.Origin] = currSeqNum+1
-		n.rumorsReceived[rumor.Origin] = append(n.rumorsReceived[rumor.Origin], rumor)
+		//n.StatusMsg[rumor.Origin] = currSeqNum+1
+		//n.Status.incrementSeqForNode(rumor.Origin)
+		//n.rumorsReceived[rumor.Origin] = append(n.rumorsReceived[rumor.Origin], rumor)
+		n.Status.updateForNewRumorFromNode(rumor.Origin, rumor)
 		originIsNbr := n.nbrSet.contains(rumor.Origin)
 		if !originIsNbr {
 			n.SetRoutingEntry(rumor.Origin, pkt.Header.RelayedBy)
@@ -146,42 +149,44 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 		return xerrors.Errorf("wrong type: %T", msg)
 	}
 
-	IHaveNew := false
-	otherHasNew := false
-	var rumorsNeedToSend []types.Rumor
-	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.rumosReceived=%s, ", n.addr, n.rumorsReceived)
-	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), received statusMsg=%s, ", n.addr, statusMsg)
-	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.Status=%s, ", n.addr, n.Status)
+	//IHaveNew := false
+	//otherHasNew := false
+	//var rumorsNeedToSend []types.Rumor
+	//log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.rumosReceived=%s, ", n.addr, n.rumorsReceived)
+	//log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), received statusMsg=%s, ", n.addr, statusMsg)
+	////log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), n.StatusMsg=%s, ", n.addr, n.Status)
+	//
+	//// should loop thru the union of statusMsg.key and n.StatusMsg.key.... yeah.. they might even have same size
+	//// but different keys
+	//for node,othersSeq := range *statusMsg {
+	//	mySeq := n.Status[node]
+	//	if (mySeq < othersSeq) {
+	//		otherHasNew = true
+	//	} else if (mySeq > othersSeq) {
+	//		// I have more than this node, so I send all rumors I received but she doesn't have to her in one rumorsMsg
+	//
+	//		// seq num starts from one, index starts from 0
+	//		// othersIndex = otherSeq - 1, myIndex = mySeq-1, want [othersIndex+1:myIndex+1]
+	//		IHaveNew = true
+	//		rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][othersSeq:mySeq]...)
+	//	}
+	//}
+	//// check for node that exist in my status but not in other's status message
+	//for node,mySeq := range n.Status {
+	//	_, inOthers := (*statusMsg)[node]
+	//	if (!inOthers) {
+	//		// for node, I have 1,...,mySeq the other has none, so send index [0, mySeq)
+	//		IHaveNew = true
+	//		rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][:mySeq]...)
+	//	}
+	//}
 
-	// should loop thru the union of statusMsg.key and n.Status.key.... yeah.. they might even have same size
-	// but different keys
-	for node,othersSeq := range *statusMsg {
-		mySeq := n.Status[node]
-		if (mySeq < othersSeq) {
-			otherHasNew = true
-		} else if (mySeq > othersSeq) {
-			// I have more than this node, so I send all rumors I received but she doesn't have to her in one rumorsMsg
-			// todo concatenate all my additional rumors for each peer
-			// seq num starts from one, index starts from 0
-			// othersIndex = otherSeq - 1, myIndex = mySeq-1, want [othersIndex+1:myIndex+1]
-			IHaveNew = true
-			rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][othersSeq:mySeq]...)
-		}
-	}
-	// check for node that exist in my status but not in other's status message
-	for node,mySeq := range n.Status {
-		_, inOthers := (*statusMsg)[node]
-		if (!inOthers) {
-			// for node, I have 1,...,mySeq the other has none, so send index [0, mySeq)
-			IHaveNew = true
-			rumorsNeedToSend = append(rumorsNeedToSend, n.rumorsReceived[node][:mySeq]...)
-		}
-	}
+	IHaveNew, otherHasNew, rumorsNeedToSend := n.Status.compareWithOthersStatus(statusMsg)
 
 	log.Info().Msgf("**** !@##@node %s enters ExecStatusMessage(), otherHasNew=%s, IHaveNew=", n.addr, otherHasNew, IHaveNew)
 	if otherHasNew {
 		// I have less than this node, so I send my status to this node and it will send back more messages
-		msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
+		msg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(), n.Status.getStatusMsg().Name())
 		n.directlySendToNbr(msg, pkt.Header.Source, 0) // todo should ttl be 0 ?
 	}
 	if IHaveNew {
@@ -201,7 +206,7 @@ func (n *node) ExecStatusMessage(msg types.Message, pkt transport.Packet) error 
 			}
 			if newNbr!="" {
 				// successfully get a random nbr
-				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status, n.Status.Name())
+				statusMsg := n.wrapInTransMsgBeforeUnicastOrSend(n.Status.getStatusMsg(), n.Status.getStatusMsg().Name())
 				n.directlySendToNbr(statusMsg, newNbr, 0)
 			}
 		}

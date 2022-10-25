@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -370,11 +369,11 @@ func Test_HW1_Messaging_Heartbeat(t *testing.T) {
 //
 //	A->B: Rumor    send to a random neighbor (could be C)
 //	A<-B: Ack
-//	A->C: Status   continue mongering
-//	A<-C: Status   missing rumor, send back status
+//	A->C: StatusMsg   continue mongering
+//	A<-C: StatusMsg   missing rumor, send back status
 //	A->C: Rumor    send missing rumor
 //	A<-C: Ack
-//	A->B: Status   continue mongering, in sync: nothing to do
+//	A->B: StatusMsg   continue mongering, in sync: nothing to do
 //
 // Here A sends first to B, but it could be C, which would inverse B and C.
 func Test_HW1_Messaging_Broadcast_ContinueMongering(t *testing.T) {
@@ -818,7 +817,7 @@ func Test_HW1_Messaging_Broadcast_BigGraph(t *testing.T) {
 
 	rand.Seed(1)
 
-	n := 4
+	n := 20
 	chatMsg := "hi from %s"
 	stopped := false
 
@@ -947,7 +946,7 @@ func Test_HW1_Messaging_Broadcast_BigGraph(t *testing.T) {
 		compare := nodesChatMsgs[0]
 		sort.Sort(types.ChatByMessage(compare))
 
-		//require.Equal(t, expected, compare)
+		require.Equal(t, expected, compare)
 	}
 
 	// > every node should have an entry to every other nodes in their routing
@@ -955,18 +954,18 @@ func Test_HW1_Messaging_Broadcast_BigGraph(t *testing.T) {
 
 	for _, node := range nodes {
 		table := node.GetRoutingTable()
-		//require.Len(t, table, len(nodes))
+		require.Len(t, table, len(nodes))
 
-		//for _, otherNode := range nodes {
-		//	_, ok := table[otherNode.GetAddr()]
-		//	require.True(t, ok)
-		//}
+		for _, otherNode := range nodes {
+			_, ok := table[otherNode.GetAddr()]
+			require.True(t, ok)
+		}
 
-		//uncomment the following to generate the routing table graphs
-		out, err := os.Create(fmt.Sprintf("node-%s.dot", node.GetAddr()))
-		require.NoError(t, err)
+		// uncomment the following to generate the routing table graphs
+		// out, err := os.Create(fmt.Sprintf("node-%s.dot", node.GetAddr()))
+		// require.NoError(t, err)
 
-		table.DisplayGraph(out)
+		// table.DisplayGraph(out)
 	}
 }
 

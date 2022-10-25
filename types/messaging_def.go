@@ -46,7 +46,7 @@ type AckMessage struct {
 }
 
 // StatusMessage describes a status message. It contains the last known sequence
-// for an origin. Status messages are used in Ack and by the anti-entropy.
+// for an origin. StatusMsg messages are used in Ack and by the anti-entropy.
 //
 // - implements types.Message
 // - implemented in HW1
